@@ -343,25 +343,25 @@ QBDI::VMAction checkTransfer(QBDI::VMInstanceRef vm, const QBDI::VMState *state,
     QBDI::rword freeAPI = (QBDI::rword) &_aligned_free;
 #endif
     if (state->event == QBDI::VMEvent::EXEC_TRANSFER_CALL) {
-        if (*s == 0 && state->sequenceStart == allocAPI) {
+        if (*s == 0 && state->basicBlockStart == allocAPI) {
             *s = 1;
         }
-        else if (*s == 2 && state->sequenceStart == freeAPI) {
+        else if (*s == 2 && state->basicBlockStart == freeAPI) {
             *s = 3;
         }
         else {
-            printf("Calling unknown address 0x%" PRIRWORD "\n", state->sequenceStart);
+            printf("Calling unknown address 0x%" PRIRWORD "\n", state->basicBlockStart);
         }
     }
     else if (state->event == QBDI::VMEvent::EXEC_TRANSFER_RETURN) {
-        if (*s == 1 && state->sequenceStart == allocAPI) {
+        if (*s == 1 && state->basicBlockStart == allocAPI) {
             *s = 2;
         }
-        else if (*s == 3 && state->sequenceStart == freeAPI) {
+        else if (*s == 3 && state->basicBlockStart == freeAPI) {
             *s = 4;
         }
         else {
-            printf("Returning from unknown address 0x%" PRIRWORD "\n", state->sequenceStart);
+            printf("Returning from unknown address 0x%" PRIRWORD "\n", state->basicBlockStart);
         }
     }
     return QBDI::VMAction::CONTINUE;

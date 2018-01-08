@@ -100,11 +100,9 @@ struct StructDesc MemoryAccessDesc {
 
 struct StructDesc VMStateDesc {
     sizeof(struct VMState),
-    6,
+    4,
     {
         offsetof(struct VMState, event),
-        offsetof(struct VMState, sequenceStart),
-        offsetof(struct VMState, sequenceEnd),
         offsetof(struct VMState, basicBlockStart),
         offsetof(struct VMState, basicBlockEnd),
         offsetof(struct VMState, lastSignal),

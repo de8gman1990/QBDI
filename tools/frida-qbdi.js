@@ -1210,14 +1210,10 @@ function QBDI() {
         var p = ptr;
         state.event = Memory.readU8(p);
         p = ptr.add(vmStateStructDesc.offsets[1]);
-        state.sequenceStart = Memory.readRword(p);
-        p = ptr.add(vmStateStructDesc.offsets[2]);
-        state.sequenceEnd = Memory.readRword(p);
-        p = ptr.add(vmStateStructDesc.offsets[3]);
         state.basicBlockStart = Memory.readRword(p);
-        p = ptr.add(vmStateStructDesc.offsets[4]);
+        p = ptr.add(vmStateStructDesc.offsets[2]);
         state.basicBlockEnd = Memory.readRword(p);
-        p = ptr.add(vmStateStructDesc.offsets[5]);
+        p = ptr.add(vmStateStructDesc.offsets[3]);
         state.lastSignal = Memory.readRword(p);
         Object.freeze(state);
         return state;

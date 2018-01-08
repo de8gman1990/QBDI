@@ -440,13 +440,9 @@ void Engine::signalEvent(VMEvent kind, rword currentPC, GPRState *gprState, FPRS
         const QBDI::CallbackRegistration& r = item.second;
         if(kind & r.mask) {
             if(curState == nullptr) {
-                curState = new VMState {kind, currentPC, currentPC, currentPC, currentPC, 0};
+                curState = new VMState {kind, currentPC, currentPC, 0};
                 if(curExecBlock != nullptr) {
                     const BBInfo* bbInfo = blockManager->getBBInfo(currentPC);
-                    uint16_t seqID = curExecBlock->getCurrentSeqID();
-
-                    curState->sequenceStart = curExecBlock->getInstMetadata(curExecBlock->getSeqStart(seqID))->address;
-                    curState->sequenceEnd = curExecBlock->getInstMetadata(curExecBlock->getSeqEnd(seqID))->endAddress();
                     curState->basicBlockStart = bbInfo->start;
                     curState->basicBlockEnd = bbInfo->end;
                 }

@@ -2751,12 +2751,6 @@ namespace QBDI {
           if (std::string(PyString_AsString(name)) == "event")
             return PyLong_FromLong(PyVMState_AsVMState(self)->event);
 
-          else if (std::string(PyString_AsString(name)) == "sequenceStart")
-            return PyLong_FromLong(PyVMState_AsVMState(self)->sequenceStart);
-
-          else if (std::string(PyString_AsString(name)) == "sequenceEnd")
-            return PyLong_FromLong(PyVMState_AsVMState(self)->sequenceEnd);
-
           else if (std::string(PyString_AsString(name)) == "basicBlockStart")
             return PyLong_FromLong(PyVMState_AsVMState(self)->basicBlockStart);
 
