@@ -49,6 +49,11 @@ struct BBInfo {
     rword end;
 };
 
+struct RegionSearch {
+    rword address;
+    size_t r;
+};
+
 struct ExecRegion {
     Range<rword>                    covered;
     unsigned                        translated; 
@@ -63,8 +68,9 @@ struct ExecRegion {
 class ExecBlockManager {
 private:
 
-    std::vector<ExecRegion>         regions;
+    std::vector<ExecRegion*>        regions;
     std::map<rword, InstAnalysis*>  analysisCache;
+    std::map<rword, ExecRegion*>    searchCache;
     std::vector<size_t>             flushList;
     rword                           total_translated_size;
     rword                           total_translation_size;
@@ -76,13 +82,15 @@ private:
 
     void eraseRegion(size_t r);
 
-    size_t searchRegion(rword start) const;
+    size_t searchRegionIdx(rword start);
 
-    size_t findRegion(Range<rword> codeRange);
+    ExecRegion* searchRegion(rword start);
+
+    ExecRegion* findRegion(Range<rword> codeRange);
 
     SeqLoc getSeqLoc(rword address);
 
-    void updateRegionStat(size_t r, rword translated);
+    void updateRegionStat(ExecRegion* r, rword translated);
 
     float getExpansionRatio() const;
 
@@ -97,7 +105,7 @@ public:
 
     ExecBlock* getExecBlock(rword address);
 
-    const BBInfo* getBBInfo(rword address) const;
+    const BBInfo* getBBInfo(rword address);
 
     void writeBasicBlock(const std::vector<Patch>& basicBlock);
 

@@ -51,17 +51,17 @@ void ExecBlockManager::printCacheStatistics(FILE* output) const {
     fprintf(output, "\tCache made of %zu regions:\n", regions.size());
     for(size_t i = 0; i < regions.size(); i++) {
         float occupation = 0.0;
-        for(size_t j = 0; j < regions[i].blocks.size(); j++) {
-            occupation += regions[i].blocks[j]->occupationRatio();
+        for(size_t j = 0; j < regions[i]->blocks.size(); j++) {
+            occupation += regions[i]->blocks[j]->occupationRatio();
         }
-        if(regions[i].blocks.size() > 1) {
+        if(regions[i]->blocks.size() > 1) {
             region_overflow += 1;
         }
-        if(regions[i].blocks.size() > 0) {
-            occupation /= regions[i].blocks.size();
+        if(regions[i]->blocks.size() > 0) {
+            occupation /= regions[i]->blocks.size();
         }
         mean_occupation += occupation;
-        fprintf(output, "\t\t[0x%" PRIRWORD ", 0x%" PRIRWORD "]: %zu blocks, %f occupation ratio\n", regions[i].covered.start, regions[i].covered.end, regions[i].blocks.size(), occupation);
+        fprintf(output, "\t\t[0x%" PRIRWORD ", 0x%" PRIRWORD "]: %zu blocks, %f occupation ratio\n", regions[i]->covered.start, regions[i]->covered.end, regions[i]->blocks.size(), occupation);
     }
     if(regions.size() > 0) {
         mean_occupation /= regions.size();
@@ -72,30 +72,30 @@ void ExecBlockManager::printCacheStatistics(FILE* output) const {
 
 SeqLoc ExecBlockManager::getSeqLoc(rword address) {
     LogDebug("ExecBlockManager::getSeqLoc", "Looking up sequence at address %" PRIRWORD, address);
-    size_t r = searchRegion(address);
-    if(r < regions.size() && regions[r].covered.contains(address)) {
+    ExecRegion* r = searchRegion(address);
+    if(r != nullptr && r->covered.contains(address)) {
         // Attempting sequenceCache resolution
-        if(regions[r].sequenceCache.count(address) == 1) {
-            SeqLoc seqLoc = regions[r].sequenceCache[address];
+        if(r->sequenceCache.count(address) == 1) {
+            SeqLoc seqLoc = r->sequenceCache[address];
             LogDebug("ExecBlockManager::getSeqLoc", "Found sequence 0x%" PRIRWORD " in ExecBlock %p as seqID %" PRIu16, 
                      address, seqLoc.execBlock, seqLoc.seqID);
             return seqLoc;
         }
         // Attempting instCache resolution    
-        if(regions[r].instCache.count(address) == 1) {
+        if(r->instCache.count(address) == 1) {
             // Retrieving instruction and corresponding block
-            InstLoc instLoc = regions[r].instCache[address];
-            ExecBlock* block = regions[r].blocks[instLoc.blockIdx];
+            InstLoc instLoc = r->instCache[address];
+            ExecBlock* block = r->blocks[instLoc.blockIdx];
             // Registering new basic block
             uint16_t existingSeqId = block->getSeqID(instLoc.instID);
-            regions[r].bbRegistry.push_back(BBInfo {
+            r->bbRegistry.push_back(BBInfo {
                 address, 
                 block->getInstMetadata(block->getSeqEnd(existingSeqId))->endAddress()
             });
             // Creating a new sequence at that instruction and saving it in the sequenceCache
             uint16_t newSeqID = block->splitSequence(instLoc.instID);
-            SeqLoc seqLoc = SeqLoc {block, newSeqID, (uint16_t) (regions[r].bbRegistry.size() - 1)};
-            regions[r].sequenceCache[address] = seqLoc;
+            SeqLoc seqLoc = SeqLoc {block, newSeqID, (uint16_t) (r->bbRegistry.size() - 1)};
+            r->sequenceCache[address] = seqLoc;
             LogDebug("ExecBlockManager::getSeqLoc", "Splitted seqID %" PRIu16 " at instID %" PRIu16 " in ExecBlock %p as new sequence with seqID %" PRIu16,
                      existingSeqId, instLoc.instID, block, newSeqID);
             return seqLoc;
@@ -114,11 +114,11 @@ ExecBlock* ExecBlockManager::getExecBlock(rword address) {
     return seqLoc.execBlock;
 }
 
-const BBInfo* ExecBlockManager::getBBInfo(rword address) const {
-    size_t r = searchRegion(address);
-    if(r < regions.size() && regions[r].covered.contains(address) && regions[r].sequenceCache.count(address) == 1) {
-        const SeqLoc &seqLoc = regions[r].sequenceCache.at(address);
-        return &regions[r].bbRegistry[seqLoc.bbIdx];
+const BBInfo* ExecBlockManager::getBBInfo(rword address) {
+    ExecRegion* r = searchRegion(address);
+    if(r != nullptr && r->covered.contains(address) && r->sequenceCache.count(address) == 1) {
+        const SeqLoc &seqLoc = r->sequenceCache.at(address);
+        return &r->bbRegistry[seqLoc.bbIdx];
     }
     return nullptr;
 }
@@ -132,11 +132,11 @@ void ExecBlockManager::writeBasicBlock(const std::vector<Patch>& basicBlock) {
 
     // Locating an approriate cache region
     Range<rword> codeRange(firstPatch.metadata.address, lastPatch.metadata.address + lastPatch.metadata.instSize);
-    size_t r = findRegion(codeRange);
+    ExecRegion* r = findRegion(codeRange);
 
     // Basic block truncation to prevent dedoubled sequence
     for(size_t i = 0; i < basicBlock.size(); i++) {
-        if(regions[r].sequenceCache.count(basicBlock[i].metadata.address) != 0) {
+        if(r->sequenceCache.count(basicBlock[i].metadata.address) != 0) {
             patchEnd = i;
             break;
         }
@@ -149,7 +149,7 @@ void ExecBlockManager::writeBasicBlock(const std::vector<Patch>& basicBlock) {
     LogDebug("ExecBlockManager::writeBasicBlock", "Writting new basic block 0x%" PRIRWORD, firstPatch.metadata.address);
     
     // Registering basic block
-    regions[r].bbRegistry.push_back(BBInfo {
+    r->bbRegistry.push_back(BBInfo {
         firstPatch.metadata.address,
         lastPatch.metadata.address + lastPatch.metadata.instSize
     });
@@ -160,28 +160,28 @@ void ExecBlockManager::writeBasicBlock(const std::vector<Patch>& basicBlock) {
             // If the region doesn't have enough space in its ExecBlocks, we add one.
             // Optimally, a region should only have one ExecBlocks but misspredictions or oversized 
             // basic blocks can cause overflows.
-            if(i >= regions[r].blocks.size()) {
-                regions[r].blocks.push_back(new ExecBlock(assembly, vminstance));
+            if(i >= r->blocks.size()) {
+                r->blocks.push_back(new ExecBlock(assembly, vminstance));
             }
             // Determine sequence type
             SeqType seqType = (SeqType) 0;
             if(patchIdx == 0) seqType = (SeqType) (seqType | SeqType::Entry);
             if(patchEnd == basicBlock.size()) seqType = (SeqType) (seqType | SeqType::Exit);
             // Write sequence
-            SeqWriteResult res = regions[r].blocks[i]->writeSequence(basicBlock.begin() + patchIdx, basicBlock.begin() + patchEnd, seqType);
+            SeqWriteResult res = r->blocks[i]->writeSequence(basicBlock.begin() + patchIdx, basicBlock.begin() + patchEnd, seqType);
             // Successful write
             if(res.seqID != EXEC_BLOCK_FULL) {
                 // Saving sequence in the sequence cache
                 SeqLoc currentSeq;
-                currentSeq.execBlock = regions[r].blocks[i];
+                currentSeq.execBlock = r->blocks[i];
                 currentSeq.seqID = res.seqID;
-                currentSeq.bbIdx = regions[r].bbRegistry.size() - 1;
-                regions[r].sequenceCache[basicBlock[patchIdx].metadata.address] = currentSeq;
+                currentSeq.bbIdx = r->bbRegistry.size() - 1;
+                r->sequenceCache[basicBlock[patchIdx].metadata.address] = currentSeq;
                 // Generate instruction mapping cache
-                uint16_t startID = regions[r].blocks[i]->getSeqStart(res.seqID);
-                uint16_t endID = regions[r].blocks[i]->getSeqEnd(res.seqID);
+                uint16_t startID = r->blocks[i]->getSeqStart(res.seqID);
+                uint16_t endID = r->blocks[i]->getSeqEnd(res.seqID);
                 for(uint16_t id = startID; id <= endID; id++) {
-                    regions[r].instCache[basicBlock[patchIdx + id - startID].metadata.address] = InstLoc {(uint16_t) i, id};
+                    r->instCache[basicBlock[patchIdx + id - startID].metadata.address] = InstLoc {(uint16_t) i, id};
                 }
                 LogDebug("ExecBlockManager::writeBasicBlock", 
                          "Sequence 0x%" PRIRWORD "-0x%" PRIRWORD " written in ExecBlock %p as seqID %" PRIu16,
@@ -204,62 +204,81 @@ void ExecBlockManager::writeBasicBlock(const std::vector<Patch>& basicBlock) {
     updateRegionStat(r, translated);
 }
 
-size_t ExecBlockManager::searchRegion(rword address) const {
+size_t ExecBlockManager::searchRegionIdx(rword address) {
     size_t low = 0;
     size_t high = regions.size();
     if(regions.size() == 0) {
         return 0;
     }
-    LogDebug("ExecBlockManager::searchRegion", "Searching for address 0x%" PRIRWORD, address);
+    LogDebug("ExecBlockManager::searchRegionIdx", "Searching for address 0x%" PRIRWORD, address);
     // Binary search of the first region to look at
     while(low + 1 != high) {
         size_t idx = (low + high) / 2;
-        if(regions[idx].covered.start > address) {
+        if(regions[idx]->covered.start > address) {
             high = idx;
         }
-        else if(regions[idx].covered.end <= address) {
+        else if(regions[idx]->covered.end <= address) {
             low = idx;
         }
         else {
-            LogDebug("ExecBlockManager::searchRegion", "Exact match for region %zu [0x%" PRIRWORD ", 0x%" PRIRWORD "]", 
-                     idx, regions[idx].covered.start, regions[idx].covered.end);
+            LogDebug("ExecBlockManager::searchRegionIdx", "Exact match for region %p [0x%" PRIRWORD ", 0x%" PRIRWORD "]", 
+                     regions[idx], regions[idx]->covered.start, regions[idx]->covered.end);
+            searchCache[address] = regions[idx];
             return idx;
         }
     }
-    LogDebug("ExecBlockManager::searchRegion", "Low match for region %zu [0x%" PRIRWORD ", 0x%" PRIRWORD "]", 
-             low, regions[low].covered.start, regions[low].covered.end);
+    LogDebug("ExecBlockManager::searchRegionIdx", "Low match for region %p [0x%" PRIRWORD ", 0x%" PRIRWORD "]", 
+             regions[low], regions[low]->covered.start, regions[low]->covered.end);
+    searchCache[address] = regions[low];
     return low;
 }
 
-size_t ExecBlockManager::findRegion(Range<rword> codeRange) {
+ExecRegion* ExecBlockManager::searchRegion(rword address) {
+    if(regions.size() == 0) {
+        return nullptr;
+    }
+    LogDebug("ExecBlockManager::searchRegion", "Searching for address 0x%" PRIRWORD, address);
+    if(searchCache.count(address) == 1) {
+        ExecRegion* r = searchCache[address];
+        LogDebug("ExecBlockManager::searchRegion", "Cache hit for region %p [0x%" PRIRWORD ", 0x%" PRIRWORD "]", 
+                 r, r->covered.start, r->covered.end);
+        return r;
+    }
+    else {
+        return regions[searchRegionIdx(address)];
+    }
+}
+
+ExecRegion* ExecBlockManager::findRegion(Range<rword> codeRange) {
     size_t best_region = regions.size();
-    size_t low = searchRegion(codeRange.start);
+    size_t low = searchRegionIdx(codeRange.start);
     unsigned best_cost = 0xFFFFFFFF;
     for(size_t i = low; i < low + 3 && i < regions.size(); i++) {
         unsigned cost = 0;
         // Easy case: the code range is inside one of the region, we can return immediately
-        if(regions[i].covered.contains(codeRange)) {
+        if(regions[i]->covered.contains(codeRange)) {
             LogDebug(
                 "ExecBlockManager::findRegion", 
-                "Basic block [0x%" PRIRWORD ", 0x%" PRIRWORD "] assigned to region %zu [0x%" PRIRWORD ", 0x%" PRIRWORD "]", 
+                "Basic block [0x%" PRIRWORD ", 0x%" PRIRWORD "] assigned to region %p [0x%" PRIRWORD ", 0x%" PRIRWORD "]", 
                 codeRange.start,
                 codeRange.end,
-                i,
-                regions[i].covered.start,
-                regions[i].covered.end
+                regions[i],
+                regions[i]->covered.start,
+                regions[i]->covered.end
             );
-            return i;
+            searchCache[codeRange.start] = regions[i];
+            return regions[i];
         }
         // Hard case: it's in the available budget of one the region. Keep the lowest cost.
         // First compute the required cost for the region to cover this extended range.
-        if(regions[i].covered.end < codeRange.end) {
-            cost += (codeRange.end - regions[i].covered.end);
+        if(regions[i]->covered.end < codeRange.end) {
+            cost += (codeRange.end - regions[i]->covered.end);
         }
-        if(regions[i].covered.start > codeRange.start) {
-            cost += (regions[i].covered.start - codeRange.start);
+        if(regions[i]->covered.start > codeRange.start) {
+            cost += (regions[i]->covered.start - codeRange.start);
         }
         // Make sure that such cost is available and that it's better than previous candidates
-        if((unsigned) (cost * getExpansionRatio()) < regions[i].available && cost < best_cost) {
+        if((unsigned) (cost * getExpansionRatio()) < regions[i]->available && cost < best_cost) {
             best_cost = cost;
             best_region = i;
         }
@@ -268,59 +287,61 @@ size_t ExecBlockManager::findRegion(Range<rword> codeRange) {
     if(best_region != regions.size()) {
         LogDebug(
             "ExecBlockManager::findRegion", 
-            "Extending region %zu [0x%" PRIRWORD ", 0x%" PRIRWORD "] to cover basic block [0x%" PRIRWORD ", 0x%" PRIRWORD "]",
-            best_region,
-            regions[best_region].covered.start,
-            regions[best_region].covered.end,
+            "Extending region %p [0x%" PRIRWORD ", 0x%" PRIRWORD "] to cover basic block [0x%" PRIRWORD ", 0x%" PRIRWORD "]",
+            regions[best_region],
+            regions[best_region]->covered.start,
+            regions[best_region]->covered.end,
             codeRange.start,
             codeRange.end
         );
-        if(regions[best_region].covered.end < codeRange.end) {
-            regions[best_region].covered.end = codeRange.end;
+        if(regions[best_region]->covered.end < codeRange.end) {
+           regions[best_region]->covered.end = codeRange.end;
         }
-        if(regions[best_region].covered.start > codeRange.start) {
-            regions[best_region].covered.start = codeRange.start;
+        if(regions[best_region]->covered.start > codeRange.start) {
+           regions[best_region]->covered.start = codeRange.start;
         }
-        return best_region;
+        searchCache[codeRange.start] = regions[best_region];
+        return regions[best_region];
     }
     // Else we have to create a new region
     // Find a place to insert it
     size_t insert = low;
     for(; insert < regions.size(); insert++) {
-        if(regions[insert].covered.start > codeRange.start) {
+        if(regions[insert]->covered.start > codeRange.start) {
             break;
         }
     }
+    regions.insert(regions.begin() + insert, new ExecRegion {codeRange, 0, 0, std::vector<ExecBlock*>()});
     LogDebug(
         "ExecBlockManager::findRegion", 
-        "Creating new region %zu to cover basic block [0x%" PRIRWORD ", 0x%" PRIRWORD "]",
-        insert,
+        "Created new region %p to cover basic block [0x%" PRIRWORD ", 0x%" PRIRWORD "]",
+        regions[insert],
         codeRange.start,
         codeRange.end
     );
-    regions.insert(regions.begin() + insert, ExecRegion {codeRange, 0, 0, std::vector<ExecBlock*>()});
-    return insert;
+    searchCache[codeRange.start] = regions[insert];
+    return regions[insert];
 }
 
-void ExecBlockManager::updateRegionStat(size_t r, rword translated) {
-    regions[r].translated += translated;
+void ExecBlockManager::updateRegionStat(ExecRegion* r, rword translated) {
+    r->translated += translated;
     // Remaining code block space
-    regions[r].available = regions[r].blocks[0]->getEpilogueOffset();
+    r->available = r->blocks[0]->getEpilogueOffset();
     // Space which needs to be reserved for the non translated part of the covered region
-    unsigned reserved = (unsigned) (((float) (regions[r].covered.size() - regions[r].translated)) * getExpansionRatio());
+    unsigned reserved = (unsigned) (((float) (r->covered.size() - r->translated)) * getExpansionRatio());
     LogDebug(
         "ExecBlockManager::updateRegionStat", 
-        "Region %zu has %zu bytes available of which %zu are reserved for %zu bytes of untranslated code",
+        "Region %p has %zu bytes available of which %zu are reserved for %zu bytes of untranslated code",
         r,
-        regions[r].available,
+        r->available,
         reserved,
-        (regions[r].covered.size() - regions[r].translated)
+        (r->covered.size() - r->translated)
     );
-    if(reserved > regions[r].available) {
-        regions[r].available = 0;
+    if(reserved > r->available) {
+        r->available = 0;
     }
     else {
-        regions[r].available -= reserved;
+        r->available -= reserved;
     }
 }
 
@@ -489,13 +510,13 @@ const InstAnalysis* ExecBlockManager::analyzeInstMetadata(const InstMetadata* in
     InstAnalysis* instAnalysis = nullptr;
     RequireAction("Engine::analyzeInstMetadata", instMetadata, return nullptr);
 
-    size_t r = searchRegion(instMetadata->address);
+    ExecRegion* r = searchRegion(instMetadata->address);
 
     // Attempt to locate it in the sequenceCache
-    if(r < regions.size() && regions[r].covered.contains(instMetadata->address) && 
-       regions[r].analysisCache.count(instMetadata->address) == 1) {
-        LogDebug("ExecBlockManager::analyzeInstMetadata", "Analysis of instruction 0x%" PRIRWORD " found in sequenceCache of region %zu", instMetadata->address, r);
-        instAnalysis = regions[r].analysisCache[instMetadata->address];
+    if(r != nullptr && r->covered.contains(instMetadata->address) && 
+       r->analysisCache.count(instMetadata->address) == 1) {
+        LogDebug("ExecBlockManager::analyzeInstMetadata", "Analysis of instruction 0x%" PRIRWORD " found in sequenceCache of region %p", instMetadata->address, r);
+        instAnalysis = r->analysisCache[instMetadata->address];
     }
     // Do we have anything we want inside the cache ?
     if ((instAnalysis != nullptr) &&
@@ -573,9 +594,9 @@ const InstAnalysis* ExecBlockManager::analyzeInstMetadata(const InstMetadata* in
     }
 
     // If its part of a region, put in in the region cache
-    if(r < regions.size() && regions[r].covered.contains(instMetadata->address)) {
+    if(r != nullptr && r->covered.contains(instMetadata->address)) {
         LogDebug("ExecBlockManager::analyzeInstMetadata", "Analysis of instruction 0x%" PRIRWORD " cached in region %zu", instMetadata->address, r);
-        regions[r].analysisCache[instMetadata->address] = instAnalysis;
+        r->analysisCache[instMetadata->address] = instAnalysis;
     }
     // Put it in the global cache. Should never happen under normal usage
     else {
@@ -587,17 +608,18 @@ const InstAnalysis* ExecBlockManager::analyzeInstMetadata(const InstMetadata* in
 
 
 void ExecBlockManager::eraseRegion(size_t r) {
-    LogDebug("ExecBlockManager::eraseRegion", "Erasing region %zu [0x%" PRIRWORD ", 0x%" PRIRWORD "]", 
-             r, regions[r].covered.start, regions[r].covered.end);
+    LogDebug("ExecBlockManager::eraseRegion", "Erasing region %p [0x%" PRIRWORD ", 0x%" PRIRWORD "]", 
+             regions[r], regions[r]->covered.start, regions[r]->covered.end);
     // Delete cached blocks
-    for(ExecBlock* block: regions[r].blocks) {
+    for(ExecBlock* block: regions[r]->blocks) {
         LogDebug("ExecBlockManager::eraseRegion", "Dropping ExecBlock %p", block);
         delete block;
     }
     // Delete cached analysis
-    for(std::pair<rword, InstAnalysis*> analysis: regions[r].analysisCache) {
+    for(std::pair<rword, InstAnalysis*> analysis: regions[r]->analysisCache) {
         freeInstAnalysis(analysis.second);
     }
+    delete(regions[r]);
     regions.erase(regions.begin() + r);
 }
 
@@ -627,6 +649,7 @@ void ExecBlockManager::flushCommit() {
             freeInstAnalysis(analysis.second);
         }
         analysisCache.clear();
+        searchCache.clear();
     }
 }
 
@@ -634,7 +657,7 @@ void ExecBlockManager::clearCache(Range<rword> range) {
     size_t i = 0;
     LogDebug("ExecBlockManager::clearCache", "Erasing range [0x%" PRIRWORD ", 0x%" PRIRWORD "]", range.start, range.end);
     for(i = 0; i < regions.size(); i++) {
-        if(regions[i].covered.overlaps(range)) {
+        if(regions[i]->covered.overlaps(range)) {
             flushList.push_back(i);
         }
     }
